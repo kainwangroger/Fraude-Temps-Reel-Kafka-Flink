@@ -1,0 +1,12 @@
+confluent-kafka>=2.5.0
+cassandra-driver>=3.30.0
+redis>=5.0.0
+fastapi>=0.115.0
+uvicorn>=0.32.0
+faker>=26.0.0
+pandas>=2.2.0
+pyarrow>=18.0.0
+minio>=7.2.0
+httpx>=0.28.0
+prometheus-client>=0.25.0
+pytest>=8.0.0

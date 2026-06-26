@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "fraud-metrics"
+    static_configs:
+      - targets: ["metrics-exporter:8001"]
+        labels:
+          app: "fraud-detection"

@@ -1,0 +1,39 @@
+# Environnement
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.so
+
+# Kafka / Flink
+flink-jars/
+
+# MinIO data
+minio_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+*.pytest_cache
+
+# Logs
+*.log
+/tmp/
+
+# Docker
+docker-data/

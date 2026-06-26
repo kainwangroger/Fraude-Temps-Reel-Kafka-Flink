@@ -1,0 +1,136 @@
+{
+  "title": "Fraud Detection - Real-Time Monitoring",
+  "tags": ["fraud", "kafka", "flink"],
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "title": "Total Alertes",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [{
+        "expr": "sum(fraud_alerts_total)",
+        "legendFormat": "Total"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "red", "value": null }] }
+        }
+      }
+    },
+    {
+      "title": "Alertes / minute",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [{
+        "expr": "sum(fraud_alerts_per_minute)",
+        "legendFormat": "Alertes/min"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [
+            { "color": "green", "value": null },
+            { "color": "yellow", "value": 10 },
+            { "color": "red", "value": 50 }
+          ]}
+        }
+      }
+    },
+    {
+      "title": "Cartes flaggées",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [{
+        "expr": "fraud_cards_flagged",
+        "legendFormat": "Cartes"
+      }]
+    },
+    {
+      "title": "Alertes par règle",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 4 },
+      "targets": [{
+        "expr": "sum by (rule) (fraud_alerts_total)",
+        "legendFormat": "{{ rule }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "displayMode": "auto" }
+        }
+      },
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "table", "placement": "right" },
+        "pieType": "pie"
+      }
+    },
+    {
+      "title": "Alertes par sévérité",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 4 },
+      "targets": [{
+        "expr": "sum by (severity) (fraud_alerts_total)",
+        "legendFormat": "{{ severity }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "displayMode": "auto" }
+        }
+      },
+      "options": {
+        "displayLabels": ["name", "percent"],
+        "legend": { "displayMode": "table", "placement": "right" },
+        "pieType": "pie"
+      }
+    },
+    {
+      "title": "Alertes / minute par règle (time series)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [{
+        "expr": "fraud_alerts_per_minute",
+        "legendFormat": "{{ rule }}"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "showPoints": "never" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "Latence de détection (P50 / P95 / P99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(fraud_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(fraud_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(fraud_detection_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "showPoints": "never" }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" }
+      }
+    }
+  ]
+}
