@@ -12,10 +12,11 @@
 Imagine une banque qui traite des millions de paiements par minute. Des fraudeurs tentent d'utiliser des cartes volées. Ce projet est un **système de surveillance automatique** qui :
 
 1. **Simule des transactions** bancaires (achats normaux et frauduleux)
-2. **Analyse chaque transaction en temps réel** avec 3 règles :
+2. **Analyse chaque transaction en temps réel** avec 4 règles :
    - *Montant suspect* → un achat de 15 000€ chez le boulanger
    - *Trop de transactions* → 5 paiements sur la même carte en 5 minutes
    - *Voyage trop rapide* → carte utilisée à Paris puis New York en 30 min
+   - *Pattern carding* → petit test (1€) puis gros retrait (1000€) en 10 min
 3. **Déclenche une alerte** immédiatement stockée dans une base de données
 4. **Affiche les alertes** sur un dashboard en temps réel
 
@@ -27,8 +28,15 @@ Imagine une banque qui traite des millions de paiements par minute. Des fraudeur
 ┌─────────────────────────────────────────────────────────────┐
 │  Producer (Python/Faker)                                    │
 │  génère 10 tx/sec (5% frauduleuses)                         │
+│  Format: JSON (defaut) ou Avro                              │
 └──────────────────┬──────────────────────────────────────────┘
-                   │ transactions (JSON)
+                   │ transactions
+                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Schema Registry (Confluent)                                 │
+│  Gère les schémas Avro (transaction.avsc, fraud_alert.avsc) │
+└──────────────────┬──────────────────────────────────────────┘
+                   │
                    ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Kafka 3.9 (broker KRaft)                                   │
@@ -45,6 +53,7 @@ Imagine une banque qui traite des millions de paiements par minute. Des fraudeur
 │  · amount > 10 000€  (filtre SQL)                          │
 │  · >= 3 tx en 5min   (HOP window COUNT)                    │
 │  · >= 2 villes en 1h (HOP window COUNT DISTINCT)           │
+│  · Pattern carding   (< 5€ puis > 1000€ en 10min)          │
 └──────────────────┬──────────────────────────────────────────┘
                    │ fraud-alerts (JSON)
                    ▼
@@ -59,8 +68,8 @@ Imagine une banque qui traite des millions de paiements par minute. Des fraudeur
          ▼                    ▼
 ┌──────────────────┐ ┌──────────────────┐
 │  Grafana         │ │  FastAPI         │
-│  Dashboard       │ │  GET /alerts     │
-│  7 panels        │ │                  │
+│  Dashboard       │ │  GET /alerts/*   │
+│  7 panels        │ │  GET /metrics    │
 └──────────────────┘ └──────────────────┘
          ▲
          │ Prometheus
@@ -92,15 +101,18 @@ git clone <url-du-repo>
 cd 01-Fraude-Temps-Reel-Kafka-Flink
 
 # 2. Lancer l'infrastructure
-docker compose up -d kafka cassandra redis
+docker compose up -d kafka schema-registry cassandra redis
 
 # 3. Vérifier que tout est prêt
-docker compose logs --tail=5 kafka cassandra redis
+docker compose logs --tail=5 kafka schema-registry cassandra redis
 
 # 4. Ouvrir 5 terminaux :
 
-# Terminal 1 - Générer des transactions
+# Terminal 1 - Générer des transactions (JSON)
 python src/producer/transaction_generator.py
+
+# Ou en mode Avro
+SERIALIZATION_FORMAT=avro python src/producer/transaction_generator.py
 
 # Terminal 2 - Détecter les fraudes
 python src/flink_jobs/fraud_detection.py
@@ -116,6 +128,7 @@ uvicorn src.api.main:app --reload --port 8000
 
 # 5. Voir les alertes
 curl http://localhost:8000/alerts/recent
+curl http://localhost:8000/alerts/stats
 
 # 6. Dashboard Grafana
 # http://localhost:3001 (admin/admin)
@@ -130,14 +143,22 @@ Génère des transactions financières synthétiques avec Faker (locale `fr_FR`)
 - 95% transactions normales (1-500€), 5% frauduleuses (500-25 000€)
 - 10 transactions/seconde
 - Envoie au topic Kafka `transactions`
+- Support JSON (défaut) ou Avro via `SERIALIZATION_FORMAT=avro`
+
+### Schema Registry
+- Service Confluent Schema Registry (port 8085)
+- Schémas Avro dans `src/schemas/` :
+  - `transaction.avsc` — schéma des transactions
+  - `fraud_alert.avsc` — schéma des alertes
 
 ### Détection de fraude `src/flink_jobs/fraud_detection.py`
-**Mode simple** (consumer Python) - 3 règles de détection :
+**Mode simple** (consumer Python) - 4 règles de détection :
 | Règle | Seuil | Fenêtre |
 |-------|-------|---------|
 | Montant excessif | `amount > 10 000€` | Aucune (par transaction) |
 | Vélocité anormale | `>= 3 tx en 5 min` | Glissante 5 min |
 | Changement pays rapide | `>= 2 villes en 1h` | Glissante 1h |
+| Pattern carding | `< 5€ puis > 1 000€ en 10 min` | Glissante 10 min |
 
 ### Mode production PyFlink `src/flink_jobs/fraud_detection_flink.py`
 Version scalable avec PyFlink Table API utilisant des HOP windows.
@@ -153,8 +174,11 @@ Nécessite un cluster Flink (docker-compose inclus).
 ### API REST `src/api/main.py`
 | Endpoint | Description |
 |----------|-------------|
-| `GET /health` | Healthcheck |
-| `GET /alerts/recent?limit=10` | N dernières alertes (de Redis) |
+| `GET /health` | Healthcheck + uptime |
+| `GET /alerts/recent?limit=10` | N dernières alertes (depuis Redis) |
+| `GET /alerts/stats` | Statistiques globales (par règle, sévérité) |
+| `GET /alerts/card/{card_id}?limit=20` | Historique des alertes d'une carte (Cassandra) |
+| `GET /metrics` | Métriques opérationnelles (uptime, throughput) |
 
 ### Monitoring
 | Service | Port | Accès |
@@ -186,6 +210,8 @@ MINIO_ENDPOINT=localhost:9002
 MINIO_ACCESS_KEY=admin
 MINIO_SECRET_KEY=password123
 API_PORT=8000
+SERIALIZATION_FORMAT=json        # json | avro
+SCHEMA_REGISTRY_URL=http://localhost:8085
 ```
 
 ---
@@ -196,12 +222,26 @@ API_PORT=8000
 .
 ├── .env                          # Configuration / variables d'environnement
 ├── .gitignore
-├── docker-compose.yml            # Infra complète (Kafka, Cassandra, Redis, Flink, MinIO, Grafana, Prometheus)
+├── .ruff.toml                    # Configuration du linter Ruff
+├── docker-compose.yml            # Infra complète (Kafka, SR, Cassandra, Redis, Flink, MinIO, Grafana, Prometheus)
 ├── requirements.txt              # Dépendances Python
 ├── Dockerfile.metrics            # Image Docker pour le metrics exporter
 ├── submit_flink_job.sh           # Script de soumission du job PyFlink
+├── PERFORMANCE.md                # Rapport de performance & benchmarks
+├── implementation_plan.md        # Plan de complétion du projet
+├── task.md                       # To-do list
+│
+├── .github/workflows/
+│   └── ci.yml                    # CI pipeline (lint + tests + docker)
+│
+├── scripts/
+│   └── benchmark.py              # Script de benchmark de performance
 │
 ├── src/
+│   ├── schemas/
+│   │   ├── transaction.avsc      # Schéma Avro des transactions
+│   │   └── fraud_alert.avsc      # Schéma Avro des alertes
+│   │
 │   ├── producer/
 │   │   └── transaction_generator.py    # Génère les transactions → Kafka
 │   │
@@ -216,7 +256,7 @@ API_PORT=8000
 │   │   └── alert_viewer.py             # Console de visualisation des alertes
 │   │
 │   ├── api/
-│   │   └── main.py                     # FastAPI (GET /health, /alerts/recent)
+│   │   └── main.py                     # FastAPI (5 endpoints + CORS)
 │   │
 │   ├── monitoring/
 │   │   ├── metrics_exporter.py         # Expose métriques Prometheus
@@ -229,8 +269,9 @@ API_PORT=8000
 │   │
 │   └── tests/
 │       ├── conftest.py
-│       ├── test_rules.py               # 12 tests unitaires des règles
-│       └── test_api.py                 # Tests API
+│       ├── test_rules.py               # 16+ tests unitaires des règles
+│       ├── test_api.py                 # Tests API
+│       └── test_integration.py         # Tests d'intégration (mockés)
 │
 ├── flink-jars/                         # JAR Kafka SQL connector pour Flink
 └── architecture.md                     # Schéma d'architecture (Mermaid)
@@ -241,11 +282,37 @@ API_PORT=8000
 ## Tests
 
 ```bash
-# Tests unitaires des règles de détection (12 tests)
+# Tests unitaires des règles de détection (16+ tests)
 python -m pytest src/tests/test_rules.py -v
 
 # Tests API (nécessite Redis en cours)
 python -m pytest src/tests/test_api.py -v
+
+# Tests d'intégration (mockés, pas d'infra requise)
+python -m pytest src/tests/test_integration.py -v
+
+# Tout exécuter
+python -m pytest src/tests/ -v
+```
+
+---
+
+## CI/CD
+
+Le pipeline CI (`.github/workflows/ci.yml`) exécute automatiquement :
+1. **Lint** — Ruff check sur `src/`
+2. **Tests** — Pytest avec service Redis
+3. **Docker** — Validation du docker-compose.yml
+
+---
+
+## Benchmark & Performance
+
+Voir [PERFORMANCE.md](./PERFORMANCE.md) pour les résultats de benchmark,
+les SLA cibles et les recommandations d'optimisation.
+
+```bash
+python scripts/benchmark.py
 ```
 
 ---
@@ -253,30 +320,11 @@ python -m pytest src/tests/test_api.py -v
 ## Déploiement GitHub
 
 ```bash
-# Depuis la racine du projet 1
 git init
 git add .
 git commit -m "Initial commit - Plateforme detection fraude temps reel"
 gh repo create fraud-detection-realtime --public --source=. --push
 ```
-
-Ou créer le repo sur github.com puis :
-```bash
-git remote add origin https://github.com/<user>/fraud-detection-realtime.git
-git push -u origin main
-```
-
----
-
-## Aller plus loin
-
-Idées d'amélioration pour le portfolio :
-- **Exactly-once semantics** avec Kafka transactions + Flink checkpointing
-- **Schema Registry** (Avro/Protobuf) pour l'évolution des schémas
-- **ML scoring** avec modèle ONNX dans Flink (remplace les seuils statiques)
-- **Pattern CEP** (carding : petit montant test → gros retrait)
-- **Tests de résilience** : kill un node Kafka, latency P99, recovery time
-- **Débit 1000 msg/sec** : ajuster le producer
 
 ---
 

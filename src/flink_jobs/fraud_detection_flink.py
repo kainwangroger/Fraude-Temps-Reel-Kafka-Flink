@@ -102,6 +102,28 @@ def register_rules(t_env):
     """)
 
     t_env.execute_sql("""
+        INSERT INTO fraud_alerts
+        SELECT
+            transaction_id,
+            card_id,
+            'pattern_carding' AS rule,
+            'high'            AS severity,
+            amount,
+            city,
+            latitude,
+            longitude,
+            PROCTIME() AS alert_time
+        FROM transactions
+        WHERE amount > 1000
+        AND card_id IN (
+            SELECT card_id FROM transactions
+            WHERE amount < 5
+            GROUP BY card_id
+            HAVING MAX(proctime) > PROCTIME() - INTERVAL '10' MINUTE
+        )
+    """)
+
+    t_env.execute_sql("""
         INSERT INTO fraud_alerts_aggregate
         SELECT
             card_id,

@@ -6,6 +6,14 @@ from collections import defaultdict
 
 from confluent_kafka import Consumer, Producer
 
+SERIALIZATION_FORMAT = os.getenv("SERIALIZATION_FORMAT", "json")
+SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8085")
+
+if SERIALIZATION_FORMAT == "avro":
+    from confluent_kafka.schema_registry import SchemaRegistryClient
+    from confluent_kafka.schema_registry.avro import AvroDeserializer
+    from confluent_kafka.serialization import SerializationContext, MessageField
+
 KAFKA_BOOTSTRAP = f'{os.getenv("KAFKA_HOST", "localhost")}:{os.getenv("KAFKA_PORT", "9092")}'
 INPUT_TOPIC = os.getenv("KAFKA_INPUT_TOPIC", "transactions")
 OUTPUT_TOPIC = os.getenv("KAFKA_OUTPUT_TOPIC", "fraud-alerts")
@@ -16,6 +24,7 @@ class FraudDetector:
     def __init__(self):
         self.card_history = defaultdict(list)
         self.card_geo = defaultdict(list)
+        self.card_recent_small = defaultdict(list)
 
     def check_amount_threshold(self, tx):
         if tx.get("amount", 0) > 10000:
@@ -75,13 +84,61 @@ class FraudDetector:
             }
         return None
 
+    def check_carding_pattern(self, tx):
+        card_id = tx["card_id"]
+        now = time.time()
+        amount = tx.get("amount", 0)
+
+        self.card_recent_small[card_id] = [
+            s for s in self.card_recent_small[card_id] if (now - s["ts"]) < 600
+        ]
+
+        if amount < 5:
+            self.card_recent_small[card_id].append({
+                "ts": now,
+                "transaction_id": tx["transaction_id"]
+            })
+            return None
+
+        if amount > 1000 and self.card_recent_small[card_id]:
+            return {
+                "transaction_id": tx["transaction_id"],
+                "card_id": card_id,
+                "rule": "pattern_carding",
+                "amount": amount,
+                "small_tx_id": self.card_recent_small[card_id][-1]["transaction_id"],
+                "timestamp": tx["timestamp"],
+                "severity": "high"
+            }
+
+        return None
+
     def detect(self, tx):
         alerts = []
-        for check in [self.check_amount_threshold, self.check_velocity, self.check_geo_hopping]:
+        for check in [self.check_amount_threshold, self.check_velocity, self.check_geo_hopping, self.check_carding_pattern]:
             alert = check(tx)
             if alert:
                 alerts.append(alert)
         return alerts
+
+
+def _create_avro_deserializer():
+    client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
+    with open("src/schemas/transaction.avsc") as f:
+        schema_str = f.read()
+    return AvroDeserializer(client, schema_str)
+
+
+_avro_deser = None
+
+def _deserialize(msg_bytes):
+    global _avro_deser
+    if SERIALIZATION_FORMAT == "avro":
+        if _avro_deser is None:
+            _avro_deser = _create_avro_deserializer()
+        ctx = SerializationContext(INPUT_TOPIC, MessageField.VALUE)
+        return _avro_deser(msg_bytes, ctx)
+    return json.loads(msg_bytes.decode("utf-8"))
 
 
 def main():
@@ -95,7 +152,7 @@ def main():
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
     detector = FraudDetector()
 
-    print("Detection de fraude en cours... (CTRL+C pour arreter)\n")
+    print(f"Detection de fraude en cours... (format={SERIALIZATION_FORMAT})\n")
 
     try:
         while True:
@@ -106,7 +163,7 @@ def main():
                 print(f"Erreur: {msg.error()}")
                 continue
 
-            tx = json.loads(msg.value().decode("utf-8"))
+            tx = _deserialize(msg.value())
             alerts = detector.detect(tx)
 
             for alert in alerts:

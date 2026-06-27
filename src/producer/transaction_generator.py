@@ -7,6 +7,14 @@ from datetime import datetime, timezone
 from faker import Faker
 from confluent_kafka import Producer
 
+SERIALIZATION_FORMAT = os.getenv("SERIALIZATION_FORMAT", "json")
+SCHEMA_REGISTRY_URL = os.getenv("SCHEMA_REGISTRY_URL", "http://localhost:8085")
+
+if SERIALIZATION_FORMAT == "avro":
+    from confluent_kafka.schema_registry import SchemaRegistryClient
+    from confluent_kafka.schema_registry.avro import AvroSerializer
+    from confluent_kafka.serialization import SerializationContext, MessageField
+
 fake = Faker("fr_FR")
 
 TRANSACTION_TOPIC = os.getenv("KAFKA_TOPIC", "transactions")
@@ -67,10 +75,29 @@ def delivery_report(err, msg):
         print(f"  -> topic={msg.topic()} partition={msg.partition()} offset={msg.offset()}")
 
 
+def _create_avro_serializer():
+    client = SchemaRegistryClient({"url": SCHEMA_REGISTRY_URL})
+    with open("src/schemas/transaction.avsc") as f:
+        schema_str = f.read()
+    return AvroSerializer(client, schema_str)
+
+
+_avro_ser = None
+
+def _serialize(tx):
+    global _avro_ser
+    if SERIALIZATION_FORMAT == "avro":
+        if _avro_ser is None:
+            _avro_ser = _create_avro_serializer()
+        ctx = SerializationContext(TRANSACTION_TOPIC, MessageField.VALUE)
+        return _avro_ser(tx, ctx)
+    return json.dumps(tx).encode("utf-8")
+
+
 def main():
     producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
 
-    print(f"Envoi de transactions vers Kafka ({KAFKA_BOOTSTRAP_SERVERS})...")
+    print(f"Envoi de transactions vers Kafka ({KAFKA_BOOTSTRAP_SERVERS}) [format={SERIALIZATION_FORMAT}]...")
     print("CTRL+C pour arreter\n")
 
     try:
@@ -78,7 +105,7 @@ def main():
             tx = generate_transaction()
             producer.produce(
                 TRANSACTION_TOPIC,
-                value=json.dumps(tx).encode("utf-8"),
+                value=_serialize(tx),
                 callback=delivery_report
             )
             producer.poll(0)

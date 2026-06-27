@@ -107,6 +107,34 @@ class TestDetect:
         assert alerts == []
 
 
+class TestCardingPattern:
+    def test_small_then_large_triggers_alert(self):
+        detector = FraudDetector()
+        detector.check_carding_pattern(make_tx(amount=4, card_id=1))
+        alert = detector.check_carding_pattern(make_tx(amount=1500, card_id=1))
+        assert alert is not None
+        assert alert["rule"] == "pattern_carding"
+        assert alert["severity"] == "high"
+
+    def test_no_small_tx_no_alert(self):
+        detector = FraudDetector()
+        alert = detector.check_carding_pattern(make_tx(amount=1500, card_id=2))
+        assert alert is None
+
+    def test_small_tx_timeout(self):
+        detector = FraudDetector()
+        detector.card_recent_small[1] = [
+            {"ts": time.time() - 700, "transaction_id": "tx-small"}
+        ]
+        alert = detector.check_carding_pattern(make_tx(amount=1500, card_id=1))
+        assert alert is None
+
+    def test_large_tx_not_enough(self):
+        detector = FraudDetector()
+        alert = detector.check_carding_pattern(make_tx(amount=500, card_id=1))
+        assert alert is None
+
+
 class TestCardHistory:
     def test_card_history_trimmed(self):
         detector = FraudDetector()

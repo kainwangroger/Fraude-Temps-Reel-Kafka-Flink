@@ -1,0 +1,14 @@
+{
+  "namespace": "fraud.detection",
+  "type": "record",
+  "name": "FraudAlert",
+  "fields": [
+    {"name": "transaction_id", "type": "string"},
+    {"name": "card_id", "type": "long"},
+    {"name": "rule", "type": "string"},
+    {"name": "severity", "type": "string"},
+    {"name": "timestamp", "type": "string"},
+    {"name": "amount", "type": ["null", "double"], "default": null},
+    {"name": "city", "type": ["null", "string"], "default": null}
+  ]
+}
